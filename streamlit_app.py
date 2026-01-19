@@ -5,11 +5,11 @@ from typing import Optional
 
 st.set_page_config(page_title="JSONL Annotator", layout="wide")
 
-st.title("Lost in Translation Annotations")
+st.title("Cognitive Behavior Annotations")
 st.markdown(
-    "Upload the JSONL file provided. The model reasons in English for a non English question and has resulted in an incorrect answer. "
-    "Please find out whether the incorrect answer is due to reasoning in English getting lost in translations i.e., mistranslations leading to incorrect answer. "
-    "If it is 'lost in translation' mark `Yes` else `No`. Once done download the output jsonl file and share it with Alan."
+    "Upload the JSONL file provided. The model reasons in the language of the question for a non English question. "
+    "Analyze the reasoning trace and identify the cognitive behaviors in the reasoning trace. "
+    ""
 )
 
 # ---------- helper functions ----------
