@@ -3,13 +3,17 @@ import pandas as pd
 import json
 from typing import Optional
 
-st.set_page_config(page_title="JSONL Annotator", layout="wide")
+st.set_page_config(page_title="Cognitive Behavior Annotator", layout="wide")
 
 st.title("Cognitive Behavior Annotations")
 st.markdown(
-    "Upload the JSONL file provided. The model reasons in the language of the question for a non English question. "
-    "Analyze the reasoning trace and identify the cognitive behaviors in the reasoning trace. "
-    ""
+    "Upload the JSONL file provided. "
+    "Count the occurrences of cognitive behaviors like  sub_goal_setting, verification, backtracking, and backward chaining in the reasoning trace."
+    " Subgoal setting: Evaluate whether this reasoning explicitly sets any subgoals (e.g., “First I will try to isolate x…”, “Next I aim to simplify …”, etc.) on the way towards the final answer. List the number of such instances."
+    " Verification: Evaluate whether this chain-of-reasoning contains any explicit answer-verification steps. An answer-verification step is any instance where the model checks its intermediate numeric result and ask itself if the answer is correct or not and probably go on to re check it. List the number of such steps."
+    " Backtracking: Evaluate whether this reasoning contains any backtracking behavior—i.e., places where the model decides that its previous approach won’t reach the correct answer and explicitly abandons that path, starting fresh on an alternative intermediate step. List the number of such instances."
+    " Backward Chaining: Evaluate whether this reasoning uses backward-chaining—i.e., it starts from the final answer and works backward to earlier steps. Count how many distinct backward-chaining instances occur."
+    " Enter the counts below and save the record. Finally, download the output JSONL file."
 )
 
 # ---------- helper functions ----------
@@ -21,7 +25,9 @@ def load_jsonl_from_bytes(b: bytes) -> pd.DataFrame:
 
 def save_jsonl(df: pd.DataFrame, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
-        for rec in df.to_dict(orient="records"):
+        # Convert to dict and ensure integers are written as standard numbers, not numpy types
+        records = df.to_dict(orient="records")
+        for rec in records:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 # ---------- sidebar: load file or example ----------
@@ -33,6 +39,9 @@ if "df" not in st.session_state:
 if "idx" not in st.session_state:
     st.session_state.idx = 0
 
+# List of columns we need for annotation
+ANNOTATION_COLS = ["sub_goal_setting", "verification", "backtracking", "backward_chaining"]
+
 # Load uploaded file (only once)
 if uploaded is not None and st.session_state.df is None:
     try:
@@ -43,9 +52,14 @@ if uploaded is not None and st.session_state.df is None:
 
 elif use_example and st.session_state.df is None:
     example = {
-        "custom_id": "Qwen_QwQ-32B_trial-4_lang_hi-doc_id_65-classification",
-        "input prompt": "Here is a chain-of-reasoning... <think>So, Jim watches TV for 2 hours... </think>",
-        "input": "(full original JSON/ prompt here)"
+        "custom_id": "demo_id_001",
+        "input prompt": "Solve for x: 2x + 4 = 10",
+        "input": "...",
+        # pre-fill example data to 0
+        "sub_goal_setting": 0,
+        "verification": 0,
+        "backtracking": 0,
+        "backward_chaining": 0
     }
     st.session_state.df = pd.DataFrame([example])
     st.success("Loaded example data")
@@ -54,11 +68,17 @@ if st.session_state.df is None:
     st.info("Upload a JSONL file on the left (or enable 'Use example data') to begin annotation.")
     st.stop()
 
-# Ensure annotation cols exist
-if "annotation" not in st.session_state.df.columns:
-    st.session_state.df["annotation"] = ""
+# Ensure annotation cols exist in DataFrame, default to 0 if missing
+for col in ANNOTATION_COLS:
+    if col not in st.session_state.df.columns:
+        st.session_state.df[col] = 0
+
 if "annotator_comment" not in st.session_state.df.columns:
     st.session_state.df["annotator_comment"] = ""
+
+# Remove old 'annotation' column if it exists to keep output clean (optional)
+if "annotation" in st.session_state.df.columns:
+    st.session_state.df.drop(columns=["annotation"], inplace=True)
 
 # ---------- navigation ----------
 n = len(st.session_state.df)
@@ -76,20 +96,7 @@ idx_widget = st.sidebar.number_input(
 # sync the session_state idx with the widget
 st.session_state.idx = int(idx_widget)
 
-# col_prev, col_next = st.sidebar.columns(2)
-# if col_prev.button("◀ Prev"):
-#     st.session_state.idx = max(0, st.session_state.idx - 1)
-#     # no explicit rerun needed; Streamlit reruns automatically on button clicks
-
-# if col_next.button("Next ▶"):
-#     st.session_state.idx = min(n-1, st.session_state.idx + 1)
-#     # no explicit rerun needed
-
 st.sidebar.markdown("---")
-# if st.sidebar.button("Save all annotations now"):
-#     save_jsonl(st.session_state.df, "annotated_output.jsonl")
-#     st.session_state.df.to_csv("annotated_output.csv", index=False)
-#     st.sidebar.success("Saved annotated_output.jsonl and annotated_output.csv")
 
 # ---------- main display ----------
 rec = st.session_state.df.iloc[st.session_state.idx]
@@ -107,54 +114,83 @@ for key in ["input prompt", "input", "prompt", "text"]:
 if prompt_text is None:
     prompt_text = json.dumps(rec.to_dict(), ensure_ascii=False, indent=2)
 
-st.markdown("**Prompt**")
-st.write(prompt_text)
-
-# if isinstance(prompt_text, str) and "<think>" in prompt_text and "</think>" in prompt_text:
-#     start = prompt_text.find("<think>") + len("<think>")
-#     end = prompt_text.find("</think>")
-#     chain = prompt_text[start:end].strip()
-#     st.markdown("**Chain-of-thought / reasoning**")
-#     st.write(chain)
+st.markdown("**Prompt / Input**")
+st.info(prompt_text)
 
 # ---------- annotation widgets ----------
 st.markdown("---")
-col1, col2 = st.columns([2, 1])
+st.markdown("### Annotator Label: Share the number of each cognitive behavior")
 
-with col1:
-    current_ann = str(rec.get("annotation", "")).strip().lower()
-    if current_ann == "yes":
-        default_index = 0
-    elif current_ann == "no":
-        default_index = 1
-    else:
-        default_index = 0
+col_form, col_save = st.columns([3, 1])
 
-    annot = st.radio(
-        "Annotator label: Has the reasoning thread got 'Lost in Translation'?",
-        ("Yes", "No"),
-        index=default_index,
-        key=f"radio_{st.session_state.idx}"
-    )
+with col_form:
+    # We use a 2x2 grid for the inputs to make it look cleaner
+    r1_c1, r1_c2 = st.columns(2)
+    r2_c1, r2_c2 = st.columns(2)
+
+    # Helper to safely get int value
+    def get_val(key):
+        val = rec.get(key, 0)
+        return int(val) if pd.notnull(val) and val != "" else 0
+
+    with r1_c1:
+        sub_goal_val = st.number_input(
+            "Sub goal setting", 
+            min_value=0, 
+            step=1, 
+            value=get_val("sub_goal_setting"),
+            key=f"sub_{st.session_state.idx}"
+        )
+    with r1_c2:
+        verification_val = st.number_input(
+            "Verification", 
+            min_value=0, 
+            step=1, 
+            value=get_val("verification"),
+            key=f"ver_{st.session_state.idx}"
+        )
+    with r2_c1:
+        backtracking_val = st.number_input(
+            "Backtracking", 
+            min_value=0, 
+            step=1, 
+            value=get_val("backtracking"),
+            key=f"back_{st.session_state.idx}"
+        )
+    with r2_c2:
+        backward_chaining_val = st.number_input(
+            "Backward chaining", 
+            min_value=0, 
+            step=1, 
+            value=get_val("backward_chaining"),
+            key=f"chain_{st.session_state.idx}"
+        )
+
     comment = st.text_area(
         "Annotator comment (optional)",
         value=rec.get("annotator_comment", ""),
-        height=120,
+        height=80,
         key=f"comment_{st.session_state.idx}"
     )
 
-with col2:
-    if st.button("Save / Update this record"):
+with col_save:
+    st.write("##") # Spacer
+    if st.button("Save / Update this record", type="primary"):
         # update DataFrame in session state
-        st.session_state.df.at[st.session_state.idx, "annotation"] = annot
+        st.session_state.df.at[st.session_state.idx, "sub_goal_setting"] = int(sub_goal_val)
+        st.session_state.df.at[st.session_state.idx, "verification"] = int(verification_val)
+        st.session_state.df.at[st.session_state.idx, "backtracking"] = int(backtracking_val)
+        st.session_state.df.at[st.session_state.idx, "backward_chaining"] = int(backward_chaining_val)
         st.session_state.df.at[st.session_state.idx, "annotator_comment"] = comment
+        
         # persist to disk
         save_jsonl(st.session_state.df, "annotated_output.jsonl")
         st.session_state.df.to_csv("annotated_output.csv", index=False)
+        
         # reassign copy so Streamlit notices the mutation
         st.session_state.df = st.session_state.df.copy()
-        st.success("Saved annotation for current record and exported files.")
-        # do not call any explicit rerun or st.stop(); Streamlit will rerun automatically on the button click
+        
+        st.success("✅ Saved!")
 
 # ---------- downloads & table ----------
 st.markdown("---")
@@ -163,6 +199,7 @@ with col_a:
     csv = st.session_state.df.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV of annotations", data=csv, file_name="annotated_output.csv", mime="text/csv")
 with col_b:
+    # Ensure integers are serialized correctly in JSONL
     jsonl_bytes = "\n".join([json.dumps(r, ensure_ascii=False) for r in st.session_state.df.to_dict(orient="records")]).encode("utf-8")
     st.download_button("Download JSONL of annotations", data=jsonl_bytes, file_name="annotated_output.jsonl", mime="application/json")
 
@@ -174,4 +211,3 @@ if show_df.shape[0] > 200:
 st.dataframe(show_df)
 
 st.caption("Files saved to the app working directory: annotated_output.jsonl and annotated_output.csv")
-
